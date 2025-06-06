@@ -45,7 +45,11 @@ func Init(env runtime.Environment, feats Features) string {
 	shell := env.Flags().Shell
 
 	switch shell {
-	case ELVISH:
+	case ELVISH, PWSH, PWSH5:
+		if shell != ELVISH && !env.Flags().Eval {
+			return PrintInit(env, feats, nil)
+		}
+
 		executable, err := getExecutablePath(env)
 		if err != nil {
 			return noExe
@@ -58,10 +62,18 @@ func Init(env runtime.Environment, feats Features) string {
 
 		config := quotePwshOrElvishStr(env.Flags().Config)
 		executable = quotePwshOrElvishStr(executable)
-		command := "eval ((external %s) init %s --config=%s --print%s | slurp)"
+
+		var command string
+
+		switch shell {
+		case PWSH, PWSH5:
+			command = "(@(& %s init %s --config=%s --print --eval%s) -join \"`n\") | Invoke-Expression"
+		case ELVISH:
+			command = "eval ((external %s) init %s --config=%s --print%s | slurp)"
+		}
 
 		return fmt.Sprintf(command, executable, shell, config, additionalParams)
-	case ZSH, BASH, FISH, CMD, XONSH, NU, PWSH, PWSH5:
+	case ZSH, BASH, FISH, CMD, XONSH, NU:
 		return PrintInit(env, feats, nil)
 	default:
 		return fmt.Sprintf(`echo "%s is not supported by Oh My Posh"`, shell)
@@ -73,7 +85,7 @@ func PrintInit(env runtime.Environment, features Features, startTime *time.Time)
 	async := slices.Contains(features, Async)
 
 	if scriptPath, OK := hasScript(env); OK {
-		return initCommand(env, shell, scriptPath, async)
+		return sourceInit(env, shell, scriptPath, async)
 	}
 
 	executable, err := getExecutablePath(env)
@@ -131,6 +143,10 @@ func PrintInit(env runtime.Environment, features Features, startTime *time.Time)
 
 	shellScript := features.Lines(shell).String(init)
 
+	if env.Flags().Eval {
+		return shellScript
+	}
+
 	log.Debug(shellScript)
 
 	scriptPath, err := writeScript(env, shellScript)
@@ -138,7 +154,7 @@ func PrintInit(env runtime.Environment, features Features, startTime *time.Time)
 		return fmt.Sprintf("echo \"Failed to write init script: %s\"", err.Error())
 	}
 
-	sourceCommand := initCommand(env, shell, scriptPath, async)
+	sourceCommand := sourceInit(env, shell, scriptPath, async)
 
 	if !env.Flags().Debug {
 		return sourceCommand
@@ -160,28 +176,6 @@ func printDebug(env runtime.Environment, startTime *time.Time) string {
 	builder.WriteString(env.Logs())
 
 	return builder.String()
-}
-
-func initCommand(env runtime.Environment, shell, scriptPath string, async bool) string {
-	command := sourceInit(env, shell, scriptPath, async)
-	sessionID := env.Flags().SessionID
-
-	switch shell {
-	case PWSH, PWSH5:
-		command += fmt.Sprintf("; $env:POSH_SESSION_ID = '%s'", sessionID)
-	case ZSH, BASH:
-		command += fmt.Sprintf("; export POSH_SESSION_ID='%s'", sessionID)
-	case FISH:
-		command += fmt.Sprintf("; set --export POSH_SESSION_ID %s", sessionID)
-	case CMD:
-		command += fmt.Sprintf("; os.setenv('POSH_SESSION_ID', '%s')", sessionID)
-	case ELVISH:
-		command += fmt.Sprintf("; set-env POSH_SESSION_ID %s", sessionID)
-	case XONSH:
-		command += fmt.Sprintf("; $POSH_SESSION_ID = '%s'", sessionID)
-	}
-
-	return command
 }
 
 func sourceInit(env runtime.Environment, shell, scriptPath string, async bool) string {
